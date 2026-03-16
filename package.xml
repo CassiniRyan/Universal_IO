@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>g1_io</name>
+  <version>0.1.0</version>
+  <description>
+    G1 robot IO platform.
+    C++ middleware owns the 500 Hz control loop and is the only writer of /lowcmd.
+    Everything else (camera, Foxglove, policy scripts, sim adapters) subscribes
+    to read-only mirror topics and never touches the control frequency.
+  </description>
+  <maintainer email="dev@example.com">G1 Dev</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+
+  <!-- Unitree ROS2 message packages — clone third_party/unitree_ros2 first -->
+  <depend>unitree_hg</depend>
+  <depend>unitree_go</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
