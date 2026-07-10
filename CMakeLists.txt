@@ -80,6 +80,12 @@ add_executable(cpp_middleware
 target_link_libraries(cpp_middleware safety_filters ${SDK2_LIBS})
 ament_target_dependencies(cpp_middleware ${ROS_DEPS})
 
+# ── lowlevel_csv_recorder: record-only, no /lowcmd publisher ───────────────
+add_executable(lowlevel_csv_recorder
+  core/bridge/cpp_middleware/src/lowlevel_csv_recorder.cpp
+)
+ament_target_dependencies(lowlevel_csv_recorder ${ROS_DEPS})
+
 # ── realsense_node (optional) ──────────────────────────────────────────────
 find_package(realsense2 QUIET)
 if(realsense2_FOUND)
@@ -96,7 +102,7 @@ endif()
 ament_python_install_package(core)
 
 # ── Install ────────────────────────────────────────────────────────────────
-install(TARGETS cpp_middleware safety_filters
+install(TARGETS cpp_middleware lowlevel_csv_recorder safety_filters
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -107,6 +113,9 @@ install(DIRECTORY
   core/utils/cpp/include/
   DESTINATION include
 )
-install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config")
+  install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+endif()
 
 ament_package()

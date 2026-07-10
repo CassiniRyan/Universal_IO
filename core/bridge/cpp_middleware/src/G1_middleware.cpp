@@ -20,6 +20,11 @@
 #include <chrono>
 #include <thread>
 #include <random>
+#include <cctype>
+#include <cstdlib>
+#include <filesystem>
+#include <iomanip>
+#include <ctime>
 
 #include "G1_middleware.hpp"
 #include "safety_filter_0.hpp"
@@ -56,6 +61,8 @@ G1Middleware::G1Middleware(const std::vector<CmdTarget>& targets,
 {
     declare_parameter("dryrun",   false);
     declare_parameter("use_sdk2", true);
+    declare_parameter("record_log", false);
+    declare_parameter("log_dir", "");
 
     bool dryrun = get_parameter("dryrun").as_bool();
 
@@ -109,6 +116,7 @@ G1Middleware::~G1Middleware() {}
 void G1Middleware::Init() {
     first_run_ = true;
     InitLowCmd();
+    InitCsvLogger();
 
     auto sq  = rclcpp::SensorDataQoS();
     auto q10 = rclcpp::QoS(10);
@@ -207,6 +215,7 @@ void G1Middleware::LowStateMessageHandler(unitree_hg::msg::LowState::SharedPtr m
 void G1Middleware::ImuMessageHandler(unitree_hg::msg::IMUState::SharedPtr msg) {
     std::lock_guard<std::mutex> lk(state_mutex_);
     torso_imu_ = *msg;
+    secondary_imu_valid_ = true;
     RCLCPP_INFO_ONCE(get_logger(), "Secondary IMU received.");
 }
 
@@ -426,7 +435,7 @@ void G1Middleware::LowCmdWrite() {
     if (l2b_pressed) {
         SetDamping();
         std::cout << "[G1Middleware] ===== L2+B: Damping mode =====" << std::endl;
-        for (auto& pub : lowcmd_publishers_) pub->publish(low_cmd_);
+        PublishLowCmd();
         return;
     }
 
@@ -455,7 +464,7 @@ void G1Middleware::LowCmdWrite() {
             RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
                 "Safety_0: %s", reason.c_str());
             // low_cmd_ replaced with damping command by the filter
-            for (auto& pub : lowcmd_publishers_) pub->publish(low_cmd_);
+            PublishLowCmd();
             return;
         }
     }
@@ -467,7 +476,7 @@ void G1Middleware::LowCmdWrite() {
             RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 1000,
                 "Safety_1: %s", reason.c_str());
             // low_cmd_ zeroed by the filter
-            for (auto& pub : lowcmd_publishers_) pub->publish(low_cmd_);
+            PublishLowCmd();
             return;
         }
     }
@@ -477,9 +486,7 @@ void G1Middleware::LowCmdWrite() {
         reinterpret_cast<uint32_t*>(&low_cmd_),
         (sizeof(unitree_hg::msg::LowCmd) >> 2) - 1);
 
-    for (auto& pub : lowcmd_publishers_) {
-        pub->publish(low_cmd_);
-    }
+    PublishLowCmd();
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -539,6 +546,200 @@ void G1Middleware::LogInfo(const std::string& s) {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// CSV logger — enabled with record_log:=True or --ros-args -p record_log:=true
+// ═════════════════════════════════════════════════════════════════════════════
+void G1Middleware::InitCsvLogger() {
+    record_log_ = get_parameter("record_log").as_bool();
+    if (!record_log_) return;
+
+    std::string log_dir = get_parameter("log_dir").as_string();
+    if (log_dir.empty()) {
+        const char* env_log_dir = std::getenv("G1_IO_LOG_DIR");
+        log_dir = env_log_dir ? std::string(env_log_dir)
+                              : (std::filesystem::current_path() / "g1_logs").string();
+    }
+
+    std::filesystem::create_directories(log_dir);
+
+    auto now_time = std::chrono::system_clock::now();
+    std::time_t tt = std::chrono::system_clock::to_time_t(now_time);
+    std::tm tm{};
+    localtime_r(&tt, &tm);
+
+    std::ostringstream name;
+    name << "g1_lowlevel_"
+         << std::put_time(&tm, "%Y%m%d_%H%M%S")
+         << ".csv";
+    log_path_ = (std::filesystem::path(log_dir) / name.str()).string();
+
+    log_file_.open(log_path_, std::ios::out | std::ios::trunc);
+    if (!log_file_.is_open()) {
+        RCLCPP_ERROR(get_logger(), "Failed to open CSV log: %s", log_path_.c_str());
+        record_log_ = false;
+        return;
+    }
+
+    WriteCsvHeader();
+    RCLCPP_INFO(get_logger(), "Recording low-level CSV log: %s", log_path_.c_str());
+}
+
+void G1Middleware::WriteCsvHeader() {
+    log_file_ << "ros_time_ns,motiontime,lowstate_tick,mode_pr,mode_machine,crc";
+
+    for (int i = 0; i < 35; ++i) {
+        log_file_
+            << ",cmd_m" << i << "_mode"
+            << ",cmd_m" << i << "_q"
+            << ",cmd_m" << i << "_dq"
+            << ",cmd_m" << i << "_tau"
+            << ",cmd_m" << i << "_kp"
+            << ",cmd_m" << i << "_kd"
+            << ",cmd_m" << i << "_reserve";
+    }
+
+    for (int i = 0; i < 35; ++i) {
+        log_file_
+            << ",state_m" << i << "_mode"
+            << ",state_m" << i << "_q"
+            << ",state_m" << i << "_dq"
+            << ",state_m" << i << "_ddq"
+            << ",state_m" << i << "_tau_est"
+            << ",state_m" << i << "_temp0"
+            << ",state_m" << i << "_temp1"
+            << ",state_m" << i << "_vol"
+            << ",state_m" << i << "_sensor0"
+            << ",state_m" << i << "_sensor1"
+            << ",state_m" << i << "_motorstate";
+        for (int r = 0; r < 4; ++r) {
+            log_file_ << ",state_m" << i << "_reserve" << r;
+        }
+    }
+
+    const char* imu_prefixes[] = {"lowstate_imu", "secondary_imu"};
+    for (const auto* prefix : imu_prefixes) {
+        log_file_
+            << "," << prefix << "_valid"
+            << "," << prefix << "_qw"
+            << "," << prefix << "_qx"
+            << "," << prefix << "_qy"
+            << "," << prefix << "_qz"
+            << "," << prefix << "_gyro_x"
+            << "," << prefix << "_gyro_y"
+            << "," << prefix << "_gyro_z"
+            << "," << prefix << "_acc_x"
+            << "," << prefix << "_acc_y"
+            << "," << prefix << "_acc_z"
+            << "," << prefix << "_roll"
+            << "," << prefix << "_pitch"
+            << "," << prefix << "_yaw"
+            << "," << prefix << "_temperature";
+    }
+    log_file_ << "\n";
+}
+
+void G1Middleware::RecordLogRow(const unitree_hg::msg::LowCmd& cmd,
+                                const unitree_hg::msg::LowState& state,
+                                const unitree_hg::msg::IMUState& secondary_imu,
+                                bool has_secondary_imu) {
+    if (!record_log_) return;
+
+    std::lock_guard<std::mutex> lk(log_mutex_);
+    if (!log_file_.is_open()) return;
+
+    log_file_ << now().nanoseconds()
+              << "," << motiontime_
+              << "," << state.tick
+              << "," << static_cast<unsigned int>(cmd.mode_pr)
+              << "," << static_cast<unsigned int>(cmd.mode_machine)
+              << "," << cmd.crc;
+
+    for (const auto& motor_cmd : cmd.motor_cmd) {
+        log_file_
+            << "," << static_cast<unsigned int>(motor_cmd.mode)
+            << "," << motor_cmd.q
+            << "," << motor_cmd.dq
+            << "," << motor_cmd.tau
+            << "," << motor_cmd.kp
+            << "," << motor_cmd.kd
+            << "," << motor_cmd.reserve;
+    }
+
+    for (const auto& motor_state : state.motor_state) {
+        log_file_
+            << "," << static_cast<unsigned int>(motor_state.mode)
+            << "," << motor_state.q
+            << "," << motor_state.dq
+            << "," << motor_state.ddq
+            << "," << motor_state.tau_est
+            << "," << motor_state.temperature[0]
+            << "," << motor_state.temperature[1]
+            << "," << motor_state.vol
+            << "," << motor_state.sensor[0]
+            << "," << motor_state.sensor[1]
+            << "," << motor_state.motorstate;
+        for (const auto reserve : motor_state.reserve) {
+            log_file_ << "," << reserve;
+        }
+    }
+
+    auto write_imu = [this](const unitree_hg::msg::IMUState& imu, bool valid) {
+        log_file_
+            << "," << (valid ? 1 : 0)
+            << "," << imu.quaternion[0]
+            << "," << imu.quaternion[1]
+            << "," << imu.quaternion[2]
+            << "," << imu.quaternion[3]
+            << "," << imu.gyroscope[0]
+            << "," << imu.gyroscope[1]
+            << "," << imu.gyroscope[2]
+            << "," << imu.accelerometer[0]
+            << "," << imu.accelerometer[1]
+            << "," << imu.accelerometer[2]
+            << "," << imu.rpy[0]
+            << "," << imu.rpy[1]
+            << "," << imu.rpy[2]
+            << "," << imu.temperature;
+    };
+
+    write_imu(state.imu_state, true);
+    write_imu(secondary_imu, has_secondary_imu);
+    log_file_ << "\n";
+}
+
+void G1Middleware::PublishLowCmd() {
+    unitree_hg::msg::LowState state_copy;
+    unitree_hg::msg::IMUState secondary_imu_copy;
+    bool has_secondary_imu = false;
+    {
+        std::lock_guard<std::mutex> lk(state_mutex_);
+        state_copy = low_state_;
+        secondary_imu_copy = torso_imu_;
+        has_secondary_imu = secondary_imu_valid_;
+    }
+
+    RecordLogRow(low_cmd_, state_copy, secondary_imu_copy, has_secondary_imu);
+
+    for (auto& pub : lowcmd_publishers_) {
+        pub->publish(low_cmd_);
+    }
+}
+
+static void AppendTargetArg(const std::string& arg, std::vector<std::string>& target_names) {
+    std::string token;
+    for (char ch : arg) {
+        if (ch == ',' || std::isspace(static_cast<unsigned char>(ch))) {
+            if (!token.empty()) {
+                target_names.push_back(token);
+                token.clear();
+            }
+        } else {
+            token.push_back(ch);
+        }
+    }
+    if (!token.empty()) target_names.push_back(token);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 // main — entry point, mirrors GO2 main()
 // Usage:
 //   ros2 run g1_io cpp_middleware                         # real robot
@@ -559,7 +760,7 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         if (std::string(argv[i]) == "--targets") {
             for (++i; i < argc && argv[i][0] != '-'; i++)
-                target_names.push_back(argv[i]);
+                AppendTargetArg(argv[i], target_names);
         }
     }
     if (target_names.empty()) target_names.push_back("real");

@@ -18,6 +18,9 @@
 #include <cmath>
 #include <mutex>
 #include <array>
+#include <fstream>
+#include <string>
+#include <vector>
 
 // ROS2
 #include "rclcpp/rclcpp.hpp"
@@ -84,6 +87,7 @@ private:
     unitree_hg::msg::LowCmd           low_cmd_{};     // built here, published to /lowcmd
 
     std::mutex state_mutex_;   // guards low_state_ / torso_imu_ / joystick_
+    bool       secondary_imu_valid_{ false };
     bool       first_run_{ true };
     int        motiontime_{ 0 };
     int        mode_{ 0 };     // button-selected mode (A=0 B=1 X=2 Y=3 ...)
@@ -142,6 +146,12 @@ private:
     // ── TF ────────────────────────────────────────────────────────────────
     std::shared_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_bc_;
 
+    // ── CSV recording ────────────────────────────────────────────────────
+    bool record_log_{ false };
+    std::ofstream log_file_;
+    std::string log_path_;
+    std::mutex log_mutex_;
+
     // ─────────────────────────────────────────────────────────────────────
     // Message handlers — each stores incoming data into member buffers
     // ─────────────────────────────────────────────────────────────────────
@@ -176,5 +186,12 @@ private:
     void SetDamping();
     void PublishStaticTF();
     void LogInfo(const std::string& s);
+    void InitCsvLogger();
+    void WriteCsvHeader();
+    void RecordLogRow(const unitree_hg::msg::LowCmd& cmd,
+                      const unitree_hg::msg::LowState& state,
+                      const unitree_hg::msg::IMUState& secondary_imu,
+                      bool has_secondary_imu);
+    void PublishLowCmd();
     uint32_t CRC32(uint32_t* ptr, uint32_t len);
 };

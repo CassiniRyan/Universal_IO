@@ -1,13 +1,13 @@
 # third_party setup
 
-This folder contains everything needed to set up the full G1 IO environment.
+This folder is kept only for third-party setup notes. The project no longer uses
+Pixi; use the system ROS2 Foxy environment plus `setup.sh` from the repo root.
 
 ## Layout
 
 ```
 third_party/
 ├── setup/
-│   ├── pixi.toml       ← environment definition (ROS2 + Python)
 │   └── README.md       ← this file
 ├── unitree_ros2/       ← clone here (provides unitree_hg / unitree_go msgs)
 └── unitree_sdk2/       ← clone here (provides DDS for BMS/board/pressure topics)
@@ -30,33 +30,20 @@ git clone https://github.com/unitreerobotics/unitree_sdk2 .
 cd ..
 ```
 
-## Step 2 — Install pixi
-
-```bash
-curl -fsSL https://pixi.prefix.dev/install.sh | bash
-```
-
-## Step 3 — Create environment
-
-```bash
-cd setup
-pixi install
-pixi shell      # activates the environment in your current shell
-```
-
-## Step 4 — Build unitree_ros2 first
+## Step 2 — Build unitree_ros2 first
 
 ```bash
 cd ../unitree_ros2
-source /opt/ros/humble/setup.bash   # or use pixi shell
+source /opt/ros/foxy/setup.bash
 colcon build --symlink-install
 source install/setup.bash
 ```
 
-## Step 5 — Build g1_io
+## Step 3 — Build g1_io
 
 ```bash
 cd ../../..     # repo root
+source setup.sh
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 ```

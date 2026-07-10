@@ -77,9 +77,8 @@ g1_io/
 │   ├── unitree_ros2/   ← clone https://github.com/unitreerobotics/unitree_ros2
 │   └── unitree_sdk2/   ← clone if raw DDS needed (optional for ROS2 path)
 ├── launch/
+│   ├── g1_middleware.launch.py
 │   └── foxglove.launch.py
-├── pixi_envs/
-│   └── pixi.toml       # ROS2 Humble + onnxruntime + pyrealsense2
 ├── docs/
 │   └── io_ports.md     # full topic/port reference
 ├── CMakeLists.txt
@@ -96,11 +95,10 @@ cd third_party/unitree_ros2
 git clone https://github.com/unitreerobotics/unitree_ros2 .
 cd ../..
 
-# 2. bootstrap (installs pixi, creates env)
-bash setup.sh
+# 2. source ROS2, Unitree CycloneDDS, and the robot network settings
+source setup.sh
 
-# 3. enter env and build
-cd pixi_envs && pixi shell
+# 3. build
 colcon build --symlink-install
 source install/setup.bash
 
@@ -108,16 +106,43 @@ source install/setup.bash
 ros2 launch unitree_ros2_bringup g1.launch.py eth_name:=eth0
 
 # 5. run middleware  (choose your target)
-pixi run run_real            # real robot only
-pixi run run_real_isaac      # real + Isaac simultaneously
-pixi run run_isaac_mujoco    # Isaac + MuJoCo simultaneously
+ros2 launch g1_io g1_middleware.launch.py targets:=real
+ros2 launch g1_io g1_middleware.launch.py targets:="real isaac"
+ros2 launch g1_io g1_middleware.launch.py targets:="isaac mujoco"
 
 # 6. optional extras (each in its own terminal)
-pixi run realsense           # depth camera
-pixi run adapter_isaac       # if using Isaac target
-pixi run adapter_mujoco      # if using MuJoCo target
-pixi run foxglove            # Foxglove at ws://localhost:8765
+ros2 run g1_io realsense_node
+ros2 run g1_io isaaclab_adapter
+ros2 run g1_io mujoco_adapter
+ros2 launch g1_io foxglove.launch.py
 ```
+
+Enable CSV logging of low-level command, motor sensing, and IMU data with:
+
+```bash
+ros2 launch g1_io g1_middleware.launch.py targets:=real record_log:=True
+```
+
+With `record_log:=True`, `g1_io` starts only the record-only subscriber node.
+It does not start `cpp_middleware`, does not ask for Enter, and does not publish
+`/lowcmd`; control stays with the official firmware/control stack.
+By default logs are written under the project directory in a new session folder:
+
+```text
+g1_logs/record_YYYY_MM_DD_HH_MM_SS_mmm/
+├── imu_state_record.csv
+├── lowcmd_record.csv
+├── lowstate_record.csv
+├── motor_cmd_record.csv
+└── motor_state_record.csv
+```
+
+`lowcmd_record.csv` and `motor_cmd_record.csv` are written only from observed
+`/lowcmd` messages; the recorder does not publish commands. `lowstate_record.csv`,
+`motor_state_record.csv`, and lowstate IMU rows in `imu_state_record.csv` are written
+from `/lowstate`. `motor_cmd_record.csv` and `motor_state_record.csv` use active
+G1 IDL joints `0..28` and include joint names for both `mode_pr == 0` and
+`mode_pr == 1`. `LowCmd` has no `ddq` field; sensed motor state includes `ddq`.
 
 ## Safety
 
@@ -138,4 +163,11 @@ writes the same command to all of them every cycle at 500 Hz:
 ros2 run g1_io cpp_middleware --targets real isaac
 ros2 run g1_io cpp_middleware --targets real mujoco
 ros2 run g1_io cpp_middleware --targets isaac mujoco
+```
+
+The launch file accepts the same target names as a whitespace- or comma-separated
+argument:
+
+```bash
+ros2 launch g1_io g1_middleware.launch.py targets:="real,isaac"
 ```
