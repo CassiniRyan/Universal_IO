@@ -8,8 +8,6 @@ install/
 log/
 
 # Generated robot recording data
-g1_logs/record_*/
-g1_logs/**/*.csv
 !g1_logs/.gitkeep
 
 # CMake/build byproducts
